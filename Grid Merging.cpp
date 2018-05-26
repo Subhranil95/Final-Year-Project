@@ -1,18 +1,32 @@
 //Grid based random deployment of nodes
 
 #include <bits/stdc++.h>
+#define E_elec 0.000000005		//J/bit
+#define E_amp  0.0000000001		//J/bit/m^2
+#define L 1000					//Length of message in bits
+#define R 102400				//Channel Capacity
+
 using namespace std;
+
+int collector_speed = 20;						//Speed of mobile data collector in m/s
+double packet_generation_rate = 0.02;			//Packet generation rate in packets/s
+int field_width = 500, field_height = 500;
+int grid_dimensions = 50;
+int no_of_nodes, alive_nodes;
 
 struct position
 {
 	int x, y;
 };
 
+position sinkpos{field_height/2, field_width/2};
+
 struct sensor_node
 {
 	int id;
-	float ini_energy, res_energy;
+	double ini_energy, res_energy;
 	position pos;
+	bool dead;
 };
 
 class grid
@@ -23,19 +37,19 @@ class grid
 		position start, end, centroid;
 		vector<sensor_node> nodes;
 		vector<grid*> neighbours;				//List that stores the neighbouring grids
-		vector<grid> subgrids;				//List that stores the grids that have been merged with the current grid
-		float res_energy;
+		vector<grid> subgrids;					//List that stores the grids that have been merged with the current grid
+		double res_energy;
 		
 		grid()
 		{
-			grid_height = grid_width = 50;
+			grid_height = grid_width = grid_dimensions;
 			centroid.x = centroid.y = num_nodes = 0;
 			grid_size = 1;
 			merge_flag = false;
 		}
 };
 
-float EuclideanDistance(position c1, position c2)
+double EuclideanDistance(position c1, position c2)
 {
 	return sqrt(pow(c1.x-c2.x,2) + pow(c1.y-c2.y,2));
 }
@@ -140,15 +154,16 @@ void deployNodes(vector<sensor_node>& node, int field_width, int field_height)
 	int num_nodes = node.size();
 	
 	//Setting the parameters for the sensor nodes
-	float temp;
+	double temp;
 	for(int i = 0; i < num_nodes; i++)
 	{
 		node[i].id = i+1;
-		temp = float(rand()%10000);
-		node[i].ini_energy = temp/10000;
-		node[i].res_energy = (float(rand()%int(temp)))/10000;
+		temp = ((double)rand()/(double)(RAND_MAX)) * 5;
+		node[i].ini_energy = temp + 5;
+		node[i].res_energy = node[i].ini_energy;
 		node[i].pos.x = rand()%field_width;
 		node[i].pos.y = rand()%field_height;
+		node[i].dead = false;
 	}
 }
 
@@ -157,7 +172,7 @@ void formGrids(vector<vector<grid> >& grids, vector<sensor_node>& node)
 	int num = grids.size();
 	int counter = 1;
 	int no_of_nodes = node.size(), cx, cy;
-	float sum;
+	double sum;
 	for(int i = 0; i < num; i++)
 	{
 		for(int j = 0; j < num; j++, counter++)
@@ -195,7 +210,7 @@ void formGrids(vector<vector<grid> >& grids, vector<sensor_node>& node)
 	}
 }
 
-vector<grid> mergeGrids(vector<vector<grid> >& grids, float threshold, int threshold2)
+vector<grid> mergeGrids(vector<vector<grid> >& grids, double threshold, int threshold2)
 {
 	cout<<"\nThreshold = "<<threshold<<"\n\n";
 	int num = grids.size();
@@ -207,13 +222,14 @@ vector<grid> mergeGrids(vector<vector<grid> >& grids, float threshold, int thres
 			if(grids[i][j].res_energy >= threshold)
 			{
 				//cout<<"Grid "<<grids[i][j].id<<"\n-------------------\n";
-				int merged_grid_index;
+				//int merged_grid_index;
 				while(1)
 				{
+					//cout<<"Hello\n";
 					int num_neighbour = grids[i][j].neighbours.size();
 					int merged_grid_index = -1;				//Variable to store the index of the neighbouring grid that is to be merged
 					position p, pos_centroid;
-					float centroid_distance, min_centroid_distance = FLT_MAX;
+					double centroid_distance, min_centroid_distance = DBL_MAX;
 					/*cout<<"\nCurrent neighbours of grid "<<grids[i][j].id<<" are: ";
 					for(int k = 0; k < num_neighbour; k++)
 					{
@@ -255,16 +271,20 @@ vector<grid> mergeGrids(vector<vector<grid> >& grids, float threshold, int thres
 					if(merged_grid_index != -1)				//If we get a grid suitable for merging, we merge it to the current grid
 					{
 						int a, b, c = grids[i][j].neighbours[merged_grid_index]->id;
-						a = (c-1)/10;
-						b = (c-1)%10;
+						a = (c-1)/num;
+						b = (c-1)%num;
 						grids[i][j].merge_flag = grids[i][j].neighbours[merged_grid_index]->merge_flag = true;						
 						grids[i][j].subgrids.push_back(grids[a][b]);
 						grids[i][j].centroid = pos_centroid;
+						
+						double total_energy = grids[i][j].res_energy * grids[i][j].num_nodes + grids[a][b].res_energy * grids[a][b].num_nodes;
 						
 						grids[i][j].neighbours = intersect_neighbour(grids[i][j], grids[a][b]);
 						grids[i][j].nodes = intersect_nodes(grids[i][j].nodes, grids[a][b].nodes);
 						grids[i][j].num_nodes = grids[i][j].num_nodes + grids[a][b].num_nodes;
 						grids[i][j].grid_size++;
+						
+						grids[i][j].res_energy = total_energy/grids[i][j].num_nodes;
 						
 						/*cout<<"\nGrid "<<grids[a][b].id<<" merged with grid "<<grids[i][j].id<<"\n";
 						cout<<"Grid "<<grids[i][j].id<<" size: "<<grids[i][j].grid_size<<endl;*/
@@ -301,13 +321,231 @@ vector<grid> mergeGrids(vector<vector<grid> >& grids, float threshold, int thres
 	}
 	return merged_grids;
 }
+
+int findEnergyDistance(vector<grid> merged_grids, double& max_re, double& min_re, double& max_distance)
+{
+	double dist;
+	position starting_point;
+	int start_index, size = merged_grids.size();
+	for(int i = 0; i < size; i++)
+	{
+		for(int j = 0; j < size; j++)
+		{
+			dist = EuclideanDistance(merged_grids[i].centroid, merged_grids[j].centroid);
+			if(dist > max_distance)
+				max_distance = dist;
+		}
+		if(merged_grids[i].res_energy > max_re)
+		{
+			max_re = merged_grids[i].res_energy;
+		}
+		if(merged_grids[i].res_energy < min_re)
+		{
+			min_re = merged_grids[i].res_energy;
+			starting_point = merged_grids[i].centroid;
+			start_index = i;
+		}
+	}
+	return start_index;
+}
  
+vector<vector<double> > constructGraph(vector<grid> merged_grids, double max_re, double max_dist, float alpha, float beta)
+{
+	int size = merged_grids.size();
+	vector<vector<double> > a(size, vector<double> (size));
+	double energy_factor, dist_factor;
+	
+	for(int i = 0; i < size; i++)
+	{
+		for(int j = 0; j < size; j++)
+		{
+			if(i == j)
+			{
+				a[i][j] = DBL_MAX;
+			}
+			else
+			{
+				energy_factor = merged_grids[j].res_energy/max_re;
+				dist_factor = EuclideanDistance(merged_grids[i].centroid, merged_grids[j].centroid)/max_dist;
+				a[i][j] = pow(energy_factor, alpha) * pow(dist_factor, beta);
+			}
+		}
+	}
+	return a;
+}
+
+void updateEnergy(grid& g, int n, double time_reqd)
+{
+	double energy = 0;
+	for(int i = 0; i < n; i++)
+	{
+		sensor_node sn = g.nodes[i];
+		if(!sn.dead)
+		{
+			double energy_consumed, dist = EuclideanDistance(sn.pos, g.centroid);
+			//cout<<"\nTime: "<<time_reqd<<"\n";
+			int packets_generated = packet_generation_rate * time_reqd; 
+			//cout<<"\n"<<packets_generated<<"\n";   
+			energy_consumed = L * packets_generated * (E_elec + E_amp * dist * dist);
+			g.nodes[i].res_energy -= energy_consumed; 
+			if(g.nodes[i].res_energy <= 0)
+			{
+				//cout<<g.nodes[i].res_energy<<"\n";
+				g.nodes[i].dead = true;
+				g.nodes[i].res_energy = 0;
+				alive_nodes--;
+			}
+			else
+				energy += g.nodes[i].res_energy;
+		}
+		
+	}
+	g.res_energy = energy/g.num_nodes;
+	//return true;
+}
+
+void collectData(vector<grid> merged_grids)
+{
+	//Function that simulates the data collection
+	
+	ofstream filout, fout;
+	filout.open("Data Collection.txt", ios::out);
+	fout.open("Simulation Results/Percentage_of_Alive_Nodes2.csv", ios::out);
+	fout<<"Round, Percentage of Nodes Alive\n\n";
+	int round, size = merged_grids.size(), curr_point, next_point, no_of_members;
+	double dist, time_to_travel, latency = 0, total_waiting_time, percentage_alive;
+	vector<double> extra_wait(size, 0);
+	vector<int> visited_points;
+	vector<int>:: iterator it;
+	bool collect_flag = true;
+	double alpha = 0.5, beta = 1-alpha;
+	round = total_waiting_time = 0;
+	while(round <= 50000)
+	{
+		double max_re = DBL_MIN, min_re = DBL_MAX, max_distance = 0, waiting_time = 0, time_curr_grid;
+		int start_index = findEnergyDistance(merged_grids, max_re, min_re, max_distance);			//Find the max. RE, min. RE, the max. distance between any two sojourn points and the starting point for data collection
+		
+		if(round != 0)
+		{
+			//Before starting the current round, data collector has to move from the sink to the starting point of the current round
+			dist = EuclideanDistance(sinkpos, merged_grids[start_index].centroid);
+			time_to_travel = dist/collector_speed;
+			total_waiting_time += time_to_travel;
+			
+			//cout<<"\nThe extra waiting times are:\n";
+			for(it = visited_points.begin(); it != visited_points.end(); it++)
+			{
+				extra_wait[*it] += time_to_travel;
+				//cout<<*it<<"\t"<<merged_grids[*it].id<<"\t"<<extra_wait[*it]<<"\n";
+			}
+		}
+		
+		//Constructing the complete graph for data collection
+		vector<vector<double> > adj = constructGraph(merged_grids, max_re, max_distance, alpha, beta);
+		
+		filout<<"\n\nRound "<<round+1<<":\n";
+		//cout<<"\n\nRound "<<round+1<<":\n";
+		filout<<"\n\nMax RE = "<<max_re<<"\nMin RE = "<<min_re<<"\n";
+	 
+		curr_point = start_index; 
+		no_of_members = merged_grids[curr_point].num_nodes;
+		time_curr_grid = (double(L)/R) * no_of_members;
+		
+		double min_weight;
+		visited_points.clear();
+		visited_points.push_back(curr_point);
+		filout<<merged_grids[curr_point].id<<"\t"<<merged_grids[curr_point].res_energy<<"\n";
+		updateEnergy(merged_grids[curr_point], no_of_members, extra_wait[curr_point] + time_curr_grid);
+		
+//		if(!collect_flag)
+//			break;
+		
+		extra_wait[curr_point] = 0;
+		waiting_time += time_curr_grid;
+		
+		while(visited_points.size() < size)
+		{
+			min_weight = DBL_MAX;
+			for(int i = 0; i < size; i++)
+			{
+				if(adj[curr_point][i] < min_weight && find(visited_points.begin(), visited_points.end(), i) == visited_points.end())
+				{
+					min_weight = adj[curr_point][i];
+					next_point = i;
+				}
+			}
+			
+			dist = EuclideanDistance(merged_grids[curr_point].centroid, merged_grids[next_point].centroid);		//Find the distance to be travelled by the data collector
+			time_to_travel = dist/collector_speed;				//Calculate the time taken by the collector to reach the next point using the distance determined in the previous step
+			waiting_time += time_to_travel;
+			
+			for(it = visited_points.begin(); it != visited_points.end(); it++)
+			{
+				extra_wait[*it] += time_to_travel;
+			}
+				
+			visited_points.push_back(next_point);
+			curr_point = next_point;
+			no_of_members = merged_grids[curr_point].num_nodes;
+			time_curr_grid = (double(L)/R) * no_of_members;
+			filout<<merged_grids[curr_point].id<<"\t"<<merged_grids[curr_point].res_energy<<"\n";
+				
+			//cout<<"\n"<<extra_wait[curr_point]<<"\n";
+			updateEnergy(merged_grids[curr_point], no_of_members, waiting_time + extra_wait[curr_point] + time_curr_grid);
+			
+//			if(!collect_flag)
+//				break;
+				
+			extra_wait[curr_point] = 0;
+			waiting_time += time_curr_grid;
+		}
+//		if(collect_flag)
+//			round++;
+//		else
+//			break;
+
+		round++;
+			
+		total_waiting_time += waiting_time;						
+		
+		//At the end of the round, the data collector has to travel to the sink
+		dist = EuclideanDistance(merged_grids[curr_point].centroid, sinkpos);
+		time_to_travel = dist/collector_speed;
+		total_waiting_time += time_to_travel;
+		
+		//cout<<"\nThe extra waiting times are:\n";
+		for(it = visited_points.begin(); it != visited_points.end(); it++)
+		{
+			extra_wait[*it] += time_to_travel;
+			//cout<<*it<<"\t"<<merged_grids[*it].id<<"\t"<<extra_wait[*it]<<"\n";
+		}	
+			
+		//cout<<"\n\n";	
+		
+		if(round%1000 == 0)
+		{
+			if(alive_nodes < 0)
+				break;
+			percentage_alive = (double(alive_nodes)/no_of_nodes) * 100;
+			fout<<round<<","<<percentage_alive<<"\n";
+		}
+			
+	}
+	if(round > 0)
+		latency = total_waiting_time/round;
+	//filout.close();
+//	cout<<"\nAlpha = "<<alpha<<", Beta = "<<beta<<"\n";
+//	cout<<"Lifetime of the network = "<<round<<" rounds\nLatency = "<<latency<<" seconds\n";
+	//fout<<alpha<<","<<beta<<","<<round<<","<<latency<<"\n";	
+	
+}
+
 int main()
 {
 	ofstream filout;
-	int field_width = 500, field_height = 500, no_of_nodes;
 	cout<<"Enter the no. of nodes to be deployed: ";
 	cin>>no_of_nodes;
+	alive_nodes = no_of_nodes;
 	vector<sensor_node> node(no_of_nodes);
 	
 	deployNodes(node, field_width, field_height);
@@ -323,7 +561,7 @@ int main()
 	filout.close();
 	
 	//Grid Formation
-	int num = field_width/50;
+	int num = field_width/grid_dimensions;
 	vector<vector<grid> > grids(num, vector<grid> (num));
 	formGrids(grids, node);
 	
@@ -343,7 +581,7 @@ int main()
 		}
 	}
 	
-	float t_sum = 0;			//Variable to store sum of residual energies of all grids
+	double t_sum = 0;			//Variable to store sum of residual energies of all grids
 	int num_nonzero_re = 0;		//Variable to count no. of grids having non-zero residual energy
 	
 	//Writing grid parameters
@@ -374,7 +612,7 @@ int main()
 			filout<<"\n";
 		}
 	}
-	float threshold = t_sum/num_nonzero_re;			
+	double threshold = t_sum/num_nonzero_re;			
 	filout<<"\nThreshold for merging = Average of the residual energies of all the grids = "<<threshold<<"\n";
 	filout.close();
 	
@@ -397,6 +635,7 @@ int main()
 	
 	int merge_upper_limit = 5;			//Upper limit of the no. of grids that can be merged into a single grid
 	vector<grid> merged_grids = mergeGrids(grids, threshold, merge_upper_limit);
+	//cout<<"Hello\n";
 	
 	//Storing the merged grids' data
 	filout.open("Merged Grids.csv", ios::out);
@@ -419,7 +658,10 @@ int main()
 		}
 		filout<<endl;
 	}
-	
 	filout.close();
+	
+	//Data Collection
+	collectData(merged_grids);
+	
 	return 0;
 }
